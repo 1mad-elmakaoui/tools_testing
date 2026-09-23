@@ -1,0 +1,114 @@
+name: sagemaker-inference-picker
+
+# Each tool in this repository has its own workflow. GitHub only reads workflow files
+# from .github/workflows at the repository root, so the separation is done with a paths
+# filter and a working-directory instead: this one runs only when its own tool changes.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "sagemaker-inference-picker/**"
+      - "docs/sagemaker-inference-picker/**"
+      - ".github/workflows/sagemaker-inference-picker.yml"
+  pull_request:
+    paths:
+      - "sagemaker-inference-picker/**"
+      - "docs/sagemaker-inference-picker/**"
+      - ".github/workflows/sagemaker-inference-picker.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sagemaker-inference-picker-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: sagemaker-inference-picker
+
+jobs:
+  check:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "sagemaker-inference-picker/pyproject.toml"
+
+      # tests/test_web_parity.py runs the page's JavaScript engine against the Python one.
+      # It skips when Node is absent, so install Node explicitly rather than let the check
+      # disappear silently on a runner that happens not to have it.
+      - name: Install Node
+        uses: actions/setup-node@v7.0.0
+        with:
+          node-version: "22"
+
+      - name: Confirm Node is available to the parity test
+        run: node --version
+
+      - name: Create the environment
+        run: uv venv --python ${{ matrix.python-version }}
+
+      - name: Install the project and its dev tools
+        run: uv pip install -e . --group dev
+
+      - name: Lint
+        run: .venv/bin/ruff check .
+
+      - name: Check formatting
+        run: .venv/bin/ruff format --check .
+
+      - name: Type-check
+        run: .venv/bin/mypy
+
+      - name: Test
+        run: .venv/bin/pytest
+
+      # Belt and braces: the suite already asserts this, but a dedicated step names the
+      # fix in its own failure output. The page it checks is published from the repository
+      # root docs/ directory, one level above this tool.
+      - name: The published page must be in step with limits.yaml
+        run: .venv/bin/python scripts/build_page.py --check
+
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "sagemaker-inference-picker/pyproject.toml"
+
+      - name: Build the wheel
+        run: uv build --wheel
+
+      # The whole tool is driven by limits.yaml, so a wheel without it installs
+      # cleanly and then fails at runtime. Catch that here rather than on a user's
+      # machine.
+      - name: The wheel must ship the limits data
+        run: unzip -l dist/*.whl | grep -q 'sagemaker_inference_picker/data/limits.yaml'
+
+      - name: The installed console script must run
+        run: |
+          uv venv --python 3.12
+          uv pip install dist/*.whl
+          .venv/bin/sagemaker-inference-picker --version
+          .venv/bin/sagemaker-inference-picker limits --output json > /dev/null
+          .venv/bin/sagemaker-inference-picker recommend \
+            --payload-mb 2 --response-mb 1 --processing-seconds 30 \
+            --traffic scheduled-batch --output json > /dev/null

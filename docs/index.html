@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tools-aws</title>
+<meta name="description" content="Small, focused command-line tools for working with AWS.">
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #fbfbfd; --surface: #ffffff; --surface-2: #f4f4f7; --border: #dcdce4;
+  --text: #16161d; --text-dim: #5c5c6b; --accent: #2f5fd0;
+  --good: #1a7f4b; --good-bg: #e8f6ee;
+  --radius: 10px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #101014; --surface: #18181f; --surface-2: #1f1f28; --border: #32323e;
+    --text: #ececf2; --text-dim: #a0a0b0; --accent: #7ba3f5;
+    --good: #5ed394; --good-bg: #16301f;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 var(--sans); }
+.wrap { max-width: 760px; margin: 0 auto; padding: 0 16px 64px; }
+header { padding: 56px 0 8px; }
+h1 { font-size: clamp(1.8rem, 5vw, 2.4rem); margin: 0 0 10px; letter-spacing: -0.02em; }
+.lede { color: var(--text-dim); margin: 0 0 20px; }
+.badge {
+  display: inline-flex; gap: 8px; background: var(--good-bg); color: var(--good);
+  border: 1px solid color-mix(in srgb, var(--good) 35%, transparent);
+  border-radius: 999px; padding: 5px 14px; font-size: 0.82rem; font-weight: 600;
+}
+.tool {
+  display: block; text-decoration: none; color: inherit;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 20px; margin-top: 16px;
+}
+.tool:hover { border-color: var(--accent); }
+.tool h2 { margin: 0 0 6px; font-size: 1.1rem; font-family: var(--mono); color: var(--accent); }
+.tool p { margin: 0 0 10px; color: var(--text-dim); font-size: 0.95rem; }
+.tool .cta { font-size: 0.85rem; font-weight: 600; color: var(--accent); }
+.soon { background: var(--surface-2); }
+.soon h2 { color: var(--text-dim); }
+h3 { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em;
+     color: var(--text-dim); margin: 32px 0 8px; }
+ul { margin: 0; padding-left: 1.2em; color: var(--text-dim); font-size: 0.95rem; }
+li { margin-bottom: 6px; }
+footer { margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--border);
+         color: var(--text-dim); font-size: 0.85rem; }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>tools-aws</h1>
+  <p class="lede">
+    Small, focused command-line tools for working with AWS. Each one is its own package,
+    installable on its own.
+  </p>
+  <p class="badge">Read-only by default &middot; nothing here calls AWS to run</p>
+</header>
+
+<a class="tool" href="sagemaker-inference-picker/">
+  <h2>sagemaker-inference-picker</h2>
+  <p>
+    Describe a workload and get the right Amazon SageMaker inference option, with the
+    specific documented limit that ruled out each of the others. Chooses between real-time
+    endpoints, serverless inference, asynchronous inference and batch transform.
+  </p>
+  <span class="cta">Open the picker &rarr;</span>
+</a>
+
+<a class="tool" href="https://github.com/imadelmakaoui-UJ/tools-aws/tree/main/dqdl-gen">
+  <h2>dqdl-gen</h2>
+  <p>
+    Profiles a CSV or Parquet file and generates a starter AWS Glue Data Quality ruleset in
+    DQDL, with every rule carrying a comment stating the evidence it came from. Rule types
+    are verified against AWS's own DQDL parser. A command-line tool, with no web version.
+  </p>
+  <span class="cta">On GitHub &rarr;</span>
+</a>
+
+<h3>What these have in common</h3>
+<ul>
+  <li>No tool calls an API that creates, modifies or deletes anything.</li>
+  <li>Every AWS limit they rely on is stored with the documentation page it was verified
+      against and the date it was checked.</li>
+  <li>The claims in the documentation are enforced by tests, so the build fails when one
+      stops being true.</li>
+</ul>
+
+<footer>
+  <a href="https://github.com/imadelmakaoui-UJ/tools-aws">Source on GitHub</a>
+  &middot; MIT licence &middot; built by
+  <a href="https://github.com/1mad-elmakaoui">@1mad-elmakaoui</a>
+</footer>
+
+</div>
+</body>
+</html>

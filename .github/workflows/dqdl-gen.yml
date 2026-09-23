@@ -1,0 +1,105 @@
+name: dqdl-gen
+
+# Each tool in this repository has its own workflow. GitHub only reads workflow files
+# from .github/workflows at the repository root, so the separation is done with a paths
+# filter and a working-directory instead: this one runs only when its own tool changes.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dqdl-gen/**"
+      - ".github/workflows/dqdl-gen.yml"
+  pull_request:
+    paths:
+      - "dqdl-gen/**"
+      - ".github/workflows/dqdl-gen.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dqdl-gen-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: dqdl-gen
+
+jobs:
+  check:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "dqdl-gen/pyproject.toml"
+
+      - name: Create the environment
+        run: uv venv --python ${{ matrix.python-version }}
+
+      - name: Install the project and its dev tools
+        run: uv pip install -e . --group dev
+
+      - name: Lint
+        run: .venv/bin/ruff check .
+
+      - name: Check formatting
+        run: .venv/bin/ruff format --check .
+
+      - name: Type-check
+        run: .venv/bin/mypy
+
+      - name: Test
+        run: .venv/bin/pytest
+
+      # The golden files are committed, so a change to a template or a tolerance that
+      # nobody meant to make shows up as a failing golden test above. This step names the
+      # fix in its own output.
+      - name: The golden files must match what the tool generates
+        run: |
+          .venv/bin/python scripts/make_golden.py
+          git diff --exit-code -- tests/golden \
+            || (echo "::error::tests/golden is stale. Run scripts/make_golden.py and commit the result." && exit 1)
+
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "dqdl-gen/pyproject.toml"
+
+      - name: Build the wheel
+        run: uv build --wheel
+
+      # Every rule the tool emits is defined in dqdl.yaml, so a wheel without it installs
+      # cleanly and then fails at runtime.
+      - name: The wheel must ship the rule catalogue
+        run: unzip -l dist/*.whl | grep -q 'dqdl_gen/data/dqdl.yaml'
+
+      - name: The installed console script must run without boto3
+        run: |
+          uv venv --python 3.12
+          uv pip install dist/*.whl
+          .venv/bin/dqdl-gen --version
+          .venv/bin/dqdl-gen rules --output json > /dev/null
+          .venv/bin/dqdl-gen generate tests/fixtures/orders.csv --stdout > /tmp/out.dqdl
+          .venv/bin/dqdl-gen validate /tmp/out.dqdl
+          # The core must work with no AWS SDK installed at all.
+          .venv/bin/python -c "import importlib.util, sys; \
+            sys.exit(1) if importlib.util.find_spec('boto3') else print('boto3 absent, core works')"

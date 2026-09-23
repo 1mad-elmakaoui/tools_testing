@@ -1,0 +1,356 @@
+# Single source of truth for every AWS-documented number this tool relies on.
+#
+# Rules for editing this file:
+#   * every entry under options.*.limits, options.*.capabilities and options.*.facts
+#     MUST carry a `source` URL pointing at official AWS documentation;
+#   * every entry under `heuristics` MUST carry a `rationale`, because those values are
+#     this tool's judgement calls rather than documented AWS limits;
+#   * bump `meta.last_verified` whenever you re-check the numbers against the docs.
+#
+# `tests/test_limits.py` enforces all of the above.
+
+schema_version: 1
+
+meta:
+  last_verified: "2026-09-22"
+  verification_note: >-
+    Values were checked against the official Amazon SageMaker AI Developer Guide and API
+    Reference pages linked in each `source` field, and cross-checked against the
+    awsdocs/amazon-sagemaker-developer-guide GitHub mirror of those same pages.
+  disclaimer: >-
+    AWS changes quotas without notice and several of these limits are soft (raisable via a
+    service quota increase). Re-verify before relying on a recommendation for a production
+    design.
+
+options:
+
+  real_time:
+    display_name: "Real-time endpoint"
+    summary: >-
+      A persistent HTTPS endpoint backed by always-on instances. The caller gets the
+      prediction back in the same request.
+    limits:
+      max_request_payload_mb:
+        value: 25
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/hosting-faqs.html"
+        note: >-
+          Raised from the widely-cited legacy 6 MB limit; exceeding it surfaces as an HTTP
+          413 ModelError from InvokeEndpoint.
+      max_response_payload_mb:
+        value: 25
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/hosting-faqs.html"
+        note: >-
+          The documented 25 MB payload limit bounds the invocation in both directions.
+      max_processing_seconds:
+        value: 60
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/deploy-model-options.html"
+        note: >-
+          The model container must answer /invocations within 60 s. Response streaming
+          extends this to 8 minutes (see facts.max_streaming_seconds) but streams tokens
+          rather than returning one complete response.
+    capabilities:
+      gpu_supported:
+        value: true
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/deploy-model-options.html"
+      scales_to_zero:
+        value: false
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/endpoint-auto-scaling-zero-instances.html"
+        note: >-
+          A plain real-time endpoint always keeps at least one instance running and billing.
+          The exception is an endpoint built from inference components, which has supported
+          scaling to zero instances since November 2024.
+      returns_inline_response:
+        value: true
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/deploy-model-options.html"
+      native_completion_notification:
+        value: false
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/deploy-model-options.html"
+        note: "The response is the notification; there is no separate completion signal."
+      supports_multi_model_endpoint:
+        value: true
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/multi-model-endpoints.html"
+    facts:
+      max_streaming_seconds:
+        value: 480
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/deploy-model-options.html"
+        note: "8 minutes, for streaming responses only."
+
+  serverless:
+    display_name: "Serverless inference"
+    summary: >-
+      An endpoint with no instances to manage that scales to zero between requests. You pay
+      for compute while a request runs, not while the endpoint is idle.
+    limits:
+      max_request_payload_mb:
+        value: 4
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/serverless-endpoints-invoke.html"
+        note: "The 4 MB cap applies to the request and the response independently."
+      max_response_payload_mb:
+        value: 4
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/serverless-endpoints-invoke.html"
+      max_processing_seconds:
+        value: 60
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/serverless-endpoints-invoke.html"
+        note: "The timeout for the container to respond to /invocations is 1 minute."
+    capabilities:
+      gpu_supported:
+        value: false
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/serverless-endpoints.html"
+        note: >-
+          GPUs are one of the documented feature exclusions, alongside marketplace model
+          packages, private Docker registries, multi-model endpoints, VPC configuration,
+          network isolation, data capture, multiple production variants, Model Monitor and
+          inference pipelines.
+      scales_to_zero:
+        value: true
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/serverless-endpoints.html"
+        note: >-
+          True only without provisioned concurrency: provisioned concurrency keeps capacity
+          warm and is billed while idle.
+      returns_inline_response:
+        value: true
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/serverless-endpoints-invoke.html"
+      native_completion_notification:
+        value: false
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/serverless-endpoints-invoke.html"
+      supports_multi_model_endpoint:
+        value: false
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/serverless-endpoints.html"
+        note: "Multi-model endpoints are an explicit feature exclusion for serverless."
+    facts:
+      min_memory_mb:
+        value: 1024
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/serverless-endpoints.html"
+      max_memory_mb:
+        value: 6144
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/serverless-endpoints.html"
+        note: "Selectable sizes are 1024, 2048, 3072, 4096, 5120 and 6144 MB."
+      ephemeral_storage_gb:
+        value: 5
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/serverless-endpoints.html"
+      max_concurrency_per_endpoint:
+        value: 200
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/serverless-endpoints.html"
+      max_provisioned_concurrency:
+        value: 200
+        source: "https://docs.aws.amazon.com/sagemaker/latest/APIReference/API_ProductionVariantServerlessConfig.html"
+        note: "Provisioned concurrency must be less than or equal to MaxConcurrency."
+      max_endpoints_per_region:
+        value: 50
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/serverless-endpoints.html"
+      worst_case_cold_start_seconds:
+        value: 240
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/serverless-endpoints-invoke.html"
+        note: >-
+          Up to 4 minutes: the model must download and the server answer /ping within
+          3 minutes, plus the 1 minute /invocations timeout.
+
+  async:
+    display_name: "Asynchronous inference"
+    summary: >-
+      A queued endpoint. The caller passes an S3 pointer to the payload, gets an
+      acknowledgement immediately, and the result is written back to S3.
+    limits:
+      max_request_payload_mb:
+        value: 1024
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/async-inference.html"
+        note: "Documented as payload sizes up to 1 GB. The payload is read from Amazon S3."
+      max_response_payload_mb:
+        value: null
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/async-inference.html"
+        note: "The result is written to Amazon S3; no separate response size limit is documented."
+      max_processing_seconds:
+        value: 3600
+        source: "https://docs.aws.amazon.com/sagemaker/latest/APIReference/API_runtime_InvokeEndpointAsync.html"
+        note: >-
+          InvocationTimeoutSeconds has a valid range of 1 to 3600 and DEFAULTS TO 900 (15
+          minutes). Anything beyond 15 minutes requires setting it explicitly per request.
+    capabilities:
+      gpu_supported:
+        value: true
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/async-inference.html"
+      scales_to_zero:
+        value: true
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/async-inference.html"
+        note: >-
+          Instance count autoscales to zero when the queue is empty; requests that arrive at
+          zero instances are queued until the endpoint scales up.
+      returns_inline_response:
+        value: false
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/async-inference.html"
+        note: >-
+          InvokeEndpointAsync returns an inference ID and an output location, not the
+          prediction.
+      native_completion_notification:
+        value: true
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/async-inference.html"
+        note: "Optional success and error notifications through Amazon SNS."
+      supports_multi_model_endpoint:
+        value: false
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/multi-model-endpoints.html"
+        note: "Multi-model endpoints are documented for real-time endpoints."
+    facts:
+      default_invocation_timeout_seconds:
+        value: 900
+        source: "https://docs.aws.amazon.com/sagemaker/latest/APIReference/API_runtime_InvokeEndpointAsync.html"
+        note: "Raise InvocationTimeoutSeconds explicitly if your model needs longer."
+
+  batch_transform:
+    display_name: "Batch transform"
+    summary: >-
+      A job, not an endpoint. SageMaker starts instances, streams a dataset from S3 through
+      the model, writes the results to S3 and tears the instances down.
+    limits:
+      max_request_payload_mb:
+        value: 100
+        source: "https://docs.aws.amazon.com/sagemaker/latest/APIReference/API_CreateTransformJob.html"
+        note: >-
+          MaxPayloadInMB is the size of a single mini-batch record, not of the dataset. It
+          cannot exceed 100 MB, and MaxConcurrentTransforms * MaxPayloadInMB must also stay
+          at or below 100 MB. The dataset itself has no documented size limit.
+      max_response_payload_mb:
+        value: null
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/batch-transform.html"
+        note: "Results are written to Amazon S3; no separate response size limit is documented."
+      max_processing_seconds:
+        value: 3600
+        source: "https://docs.aws.amazon.com/sagemaker/latest/APIReference/API_CreateTransformJob.html"
+        note: >-
+          ModelClientConfig.InvocationsTimeoutInSeconds bounds a single invocation and has a
+          valid range of 1 to 3600, defaulting to 600. The job as a whole may run far longer.
+    capabilities:
+      gpu_supported:
+        value: true
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/batch-transform.html"
+      scales_to_zero:
+        value: true
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/batch-transform.html"
+        note: "Instances exist only for the duration of the job, so there is no idle cost."
+      returns_inline_response:
+        value: false
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/batch-transform.html"
+        note: "There is no caller to respond to; output goes to Amazon S3."
+      native_completion_notification:
+        value: true
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/batch-transform.html"
+        note: >-
+          The transform job has a terminal status that EventBridge emits on, which is a
+          completion signal for the job but not a per-request one.
+      supports_multi_model_endpoint:
+        value: false
+        source: "https://docs.aws.amazon.com/sagemaker/latest/dg/multi-model-endpoints.html"
+    facts:
+      default_invocations_timeout_seconds:
+        value: 600
+        source: "https://docs.aws.amazon.com/sagemaker/latest/APIReference/API_CreateTransformJob.html"
+      max_concurrent_transforms_times_payload_mb:
+        value: 100
+        source: "https://docs.aws.amazon.com/sagemaker/latest/APIReference/API_CreateTransformJob.html"
+
+# Secondary deployment patterns the tool can advise on. These are not standalone options;
+# they modify one of the four options above.
+patterns:
+  multi_model_endpoint:
+    display_name: "Multi-model endpoint (MME)"
+    applies_to: real_time
+    source: "https://docs.aws.amazon.com/sagemaker/latest/dg/multi-model-endpoints.html"
+    note: >-
+      Hosts many models behind one endpoint on shared instances, loading each on demand.
+      Supported on all CPU instance types and on single-GPU instance types via the Triton
+      inference server. Not available for serverless inference.
+  inference_components:
+    display_name: "Inference components"
+    applies_to: real_time
+    source: "https://docs.aws.amazon.com/sagemaker/latest/dg/endpoint-auto-scaling-zero-instances.html"
+    note: >-
+      Give each model its own CPU, GPU, memory and copy count on a shared endpoint, and let
+      each scale independently. Inference-component endpoints can also scale to zero
+      instances, which a plain real-time endpoint cannot.
+  provisioned_concurrency:
+    display_name: "Provisioned concurrency"
+    applies_to: serverless
+    source: "https://aws.amazon.com/about-aws/whats-new/2023/05/provisioned-concurrency-amazon-sagemaker-serverless-inference"
+    note: >-
+      Keeps a set number of serverless workers warm so requests are served in milliseconds
+      instead of paying a cold start. It is billed while idle, so it trades away the
+      zero-idle-cost property of plain serverless.
+
+# Judgement calls made by this tool. These are NOT AWS-documented limits, so they carry a
+# rationale instead of a source.
+heuristics:
+  tight_latency_p99_ms:
+    value: 1000
+    rationale: >-
+      A serverless cold start can add up to 240 s (see serverless.facts). Any p99 target
+      under one second is therefore missed catastrophically, not marginally, by an
+      unprovisioned serverless endpoint, so below this threshold real-time is preferred.
+  multi_model_endpoint_min_models:
+    value: 3
+    rationale: >-
+      Below three models, one endpoint per model is simpler to operate and reason about, and
+      the per-endpoint cost saving does not pay for the added cold-load complexity of MME.
+  inference_components_min_models:
+    value: 2
+    rationale: >-
+      Inference components exist to give more than one model independent resources and
+      scaling on a shared endpoint, so they become relevant as soon as there are two models.
+  weights:
+    steady_traffic_favours_real_time:
+      value: 3.0
+      rationale: >-
+        Steady traffic keeps provisioned instances busy, which is exactly the case where
+        paying for always-on capacity is efficient.
+    bursty_traffic_favours_serverless:
+      value: 3.0
+      rationale: >-
+        Bursty traffic with idle periods is the case serverless is built for: you pay per
+        request rather than for idle instances.
+    bursty_traffic_favours_async:
+      value: 1.0
+      rationale: >-
+        Asynchronous inference also scales to zero between bursts, but adds queueing and an
+        S3 round trip, so it is a weaker fit than serverless for bursty traffic.
+    scheduled_batch_favours_batch_transform:
+      value: 4.0
+      rationale: >-
+        A known dataset processed on a schedule is precisely a batch transform job: no
+        endpoint to manage and no idle cost between runs.
+    scheduled_batch_favours_async:
+      value: 1.0
+      rationale: >-
+        An asynchronous endpoint can drain a scheduled backlog, but it keeps an endpoint to
+        operate that a transform job does not.
+    tight_latency_favours_real_time:
+      value: 2.0
+      rationale: >-
+        Warm, always-on instances are the only way to hold a tight p99 without paying for
+        provisioned concurrency.
+    tight_latency_penalises_serverless:
+      value: -2.0
+      rationale: >-
+        Cold starts make an unprovisioned serverless endpoint an unreliable way to meet a
+        tight p99. The penalty is a warning, not a disqualification, because provisioned
+        concurrency can remove the cold start.
+    offline_result_favours_async:
+      value: 1.0
+      rationale: >-
+        When the caller does not need the answer inline, the queueing and decoupling of
+        asynchronous inference becomes a benefit rather than a cost.
+    offline_result_favours_batch_transform:
+      value: 1.0
+      rationale: >-
+        When the caller does not need the answer inline, a job with no endpoint to operate
+        is the cheapest thing to run.
+    many_models_favour_real_time:
+      value: 1.0
+      rationale: >-
+        Real-time is the only option of the four that supports multi-model endpoints and
+        inference components, both of which exist to host many models economically.
+
+# Applied when two surviving options score identically. Earlier entries win.
+tie_break_order:
+  value: ["serverless", "batch_transform", "async", "real_time"]
+  rationale: >-
+    On a tie, prefer the option with the least always-on infrastructure to operate and pay
+    for: serverless and transform jobs cost nothing at rest, an asynchronous endpoint still
+    has to be managed, and a real-time endpoint bills continuously.

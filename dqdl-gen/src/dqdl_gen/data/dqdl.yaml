@@ -1,0 +1,243 @@
+# Single source of truth for this tool: what DQDL allows, and how tolerant the generated
+# rules should be.
+#
+# Two kinds of entry live here and they are validated differently:
+#
+#   * `rule_types` and `data_types` are facts about AWS Glue's DQDL. Every entry MUST carry
+#     a `source` URL. The tool will not emit a rule type that is not listed here.
+#   * `strictness` and `shape` are this tool's judgement calls. Every entry MUST carry a
+#     `rationale`, because no AWS document says what a sensible tolerance is.
+#
+# tests/test_catalog.py enforces both rules against this file.
+
+schema_version: 1
+
+meta:
+  last_verified: "2026-09-23"
+  verification_note: >-
+    Rule-type names, parameter counts and the ColumnDataType value list were taken from
+    AWS's own DQDL parser, awslabs/dqdl, specifically configuration/rules/rules-config.json
+    and the ANTLR grammar in configuration/dqdl/. That repository is the parser AWS Glue
+    Data Quality itself uses, so it is a stricter check than the prose documentation.
+  grammar_source: "https://github.com/awslabs/dqdl"
+  reference_source: "https://docs.aws.amazon.com/glue/latest/dg/dqdl.html"
+  disclaimer: >-
+    A generated ruleset is a starting point derived from one profile of one file. Review it
+    before committing it to a pipeline: the tool describes the data it was shown, which is
+    not the same as the data you expect tomorrow.
+
+# How DQDL itself is written. Verified against the ANTLR grammar.
+syntax:
+  comment_prefix:
+    value: "#"
+    source: "https://github.com/awslabs/dqdl/blob/master/configuration/dqdl/CommonLexerRules.g4"
+    note: >-
+      LINE_COMMENT is '#' .*? '\r'? '\n' and is skipped by the lexer. The pattern requires a
+      newline, so a comment on an unterminated final line does not lex as a comment and the
+      file fails to parse. Generated files must therefore end with a newline.
+  string_escapes:
+    value: ["\\\"", "\\\\"]
+    source: "https://github.com/awslabs/dqdl/blob/master/configuration/dqdl/CommonLexerRules.g4"
+    note: >-
+      fragment ESC is only '\"' and '\\'. No other escape sequence is recognised inside a
+      quoted string.
+  number_format:
+    value: "INT | INT '.' INT, optionally preceded by '-'"
+    source: "https://github.com/awslabs/dqdl/blob/master/configuration/dqdl/CommonLexerRules.g4"
+    note: >-
+      There is no exponent form. A float formatted as 1e-07 by repr() is not a valid DQDL
+      number, so numbers must be rendered in plain decimal notation.
+  identifier_characters:
+    value: "[a-zA-Z0-9_.]+"
+    source: "https://github.com/awslabs/dqdl/blob/master/configuration/dqdl/CommonLexerRules.g4"
+    note: >-
+      Unquoted identifiers cannot contain a hyphen or a space, so column names are always
+      emitted quoted.
+
+# Only these rule types are ever generated. The grammar treats any identifier as a rule
+# type name, so a grammar-level parse would happily accept an invented one; the validator
+# checks names and arity against this list for that reason.
+rule_types:
+  RowCount:
+    parameters: 0
+    condition: number
+    scope: table
+    description: "Check the number of rows in the dataset"
+    source: "https://docs.aws.amazon.com/glue/latest/dg/dqdl-rule-types-RowCount.html"
+  ColumnCount:
+    parameters: 0
+    condition: number
+    scope: table
+    description: "Checks the number of columns in the dataset"
+    source: "https://docs.aws.amazon.com/glue/latest/dg/dqdl-rule-types-ColumnCount.html"
+  IsComplete:
+    parameters: 1
+    condition: none
+    scope: column
+    description: "Check that a column contains no null values"
+    source: "https://docs.aws.amazon.com/glue/latest/dg/dqdl-rule-types-IsComplete.html"
+  Completeness:
+    parameters: 1
+    condition: number
+    scope: column
+    description: "Check the fraction of non-null values in a column"
+    source: "https://docs.aws.amazon.com/glue/latest/dg/dqdl-rule-types-Completeness.html"
+  IsUnique:
+    parameters: 1
+    condition: none
+    scope: column
+    description: "Check that all values in a column are unique"
+    source: "https://docs.aws.amazon.com/glue/latest/dg/dqdl-rule-types-IsUnique.html"
+  Uniqueness:
+    parameters: 1
+    condition: number
+    scope: column
+    description: "Check the fraction of unique values in a column"
+    source: "https://docs.aws.amazon.com/glue/latest/dg/dqdl-rule-types-Uniqueness.html"
+  IsPrimaryKey:
+    parameters: 1
+    condition: none
+    scope: column
+    description: "Check that a column is unique and complete"
+    source: "https://docs.aws.amazon.com/glue/latest/dg/dqdl-rule-types-IsPrimaryKey.html"
+  ColumnValues:
+    parameters: 1
+    condition: any
+    scope: column
+    description: "Constrain the values a column may hold"
+    source: "https://docs.aws.amazon.com/glue/latest/dg/dqdl-rule-types-ColumnValues.html"
+  ColumnLength:
+    parameters: 1
+    condition: number
+    scope: column
+    description: "Constrain the length of the values in a column"
+    source: "https://docs.aws.amazon.com/glue/latest/dg/dqdl-rule-types-ColumnLength.html"
+  ColumnDataType:
+    parameters: 1
+    condition: string
+    scope: column
+    description: "Check that a column's values cast to the given Spark type"
+    source: "https://docs.aws.amazon.com/glue/latest/dg/dqdl-rule-types-ColumnDataType.html"
+  DistinctValuesCount:
+    parameters: 1
+    condition: number
+    scope: column
+    description: "Check the number of distinct values in a column"
+    source: "https://docs.aws.amazon.com/glue/latest/dg/dqdl-rule-types-DistinctValuesCount.html"
+
+# The complete set of values ColumnDataType accepts. Note that "String" is NOT one of them,
+# so no ColumnDataType rule is generated for string columns.
+data_types:
+  value: ["Boolean", "Date", "Timestamp", "Integer", "Double", "Float", "Long"]
+  source: "https://github.com/awslabs/dqdl/blob/master/configuration/rules/rules-config.json"
+  note: >-
+    Taken verbatim from the ColumnDataType description in AWS's rules-config.json:
+    "Supported values: Boolean, Date, Timestamp, Integer, Double, Float, Long".
+
+# When a column looks like a category rather than free text.
+shape:
+  max_allowed_value_set:
+    value: 25
+    rationale: >-
+      An allowed-value rule stops being readable, and starts being a liability, once it is
+      longer than a screenful. Above this many distinct values the column is treated as free
+      text and gets a length rule instead.
+  max_distinct_ratio:
+    value: 0.1
+    rationale: >-
+      A column with few distinct values in a small file may simply be a small sample rather
+      than a genuine category. Requiring distinct values to be under a tenth of the rows
+      stops a 20-row file turning every column into an enum.
+  min_rows_for_value_set:
+    value: 50
+    rationale: >-
+      Below this many rows there is not enough evidence that the observed values are the
+      whole set, so no allowed-value rule is generated at all.
+  top_values_shown:
+    value: 5
+    rationale: "How many frequent values the --explain profile table shows per column."
+  min_uniqueness_for_rule:
+    value: 0.95
+    rationale: >-
+      A column that is almost but not quite unique is usually a key with a few duplicates
+      worth watching, so it gets a Uniqueness rule rather than nothing. Below this the
+      column is simply not a key and a uniqueness rule would be noise.
+  key_candidate_kinds:
+    value: ["integer", "string"]
+    rationale: >-
+      Only these column kinds get uniqueness rules. A float measure whose values all happen
+      to differ in one file is not a candidate key, and a rule saying it is would fail the
+      first time two rows shared an amount. Dates and booleans are excluded for the same
+      reason.
+
+# How much room each strictness level leaves for normal variation.
+strictness:
+  strict:
+    description: "Rules hug the observed data. Expect failures on normal drift."
+    completeness_margin:
+      value: 0.002
+      rationale: >-
+        Barely below the observed rate: enough to absorb rounding in the profile, not enough
+        to absorb a real change in the source.
+    uniqueness_margin:
+      value: 0.002
+      rationale: "Same reasoning as completeness_margin."
+    numeric_padding:
+      value: 0.0
+      rationale: "The observed minimum and maximum are used unchanged."
+    length_padding:
+      value: 0
+      rationale: "The observed length bounds are used unchanged."
+    row_count_tolerance:
+      value: 0.05
+      rationale: >-
+        Even a strict ruleset needs some row-count movement, or it fails on the first day the
+        dataset grows.
+  balanced:
+    description: "The default. Absorbs normal variation without hiding real problems."
+    completeness_margin:
+      value: 0.01
+      rationale: >-
+        One percentage point below observed, then rounded down to two decimals, so an
+        observed 0.992 becomes a rule at 0.98. Small enough to catch a genuine regression,
+        large enough to survive an ordinary day.
+    uniqueness_margin:
+      value: 0.01
+      rationale: "Same reasoning as completeness_margin."
+    numeric_padding:
+      value: 0.05
+      rationale: >-
+        Widens the observed range by five percent of its span at each end. A profile sees one
+        file; the next file will contain values slightly outside it.
+    length_padding:
+      value: 1
+      rationale: >-
+        One character at each end covers the common case of a value gaining a suffix or
+        losing a padding character.
+    row_count_tolerance:
+      value: 0.2
+      rationale: >-
+        Daily volumes move. Twenty percent catches a source that has halved or doubled while
+        ignoring ordinary fluctuation.
+  lenient:
+    description: "Rules only fire on obvious breakage. Good for a first pass on unfamiliar data."
+    completeness_margin:
+      value: 0.05
+      rationale: >-
+        Five percentage points below observed: only a substantial loss of data trips it.
+    uniqueness_margin:
+      value: 0.05
+      rationale: "Same reasoning as completeness_margin."
+    numeric_padding:
+      value: 0.25
+      rationale: >-
+        A quarter of the observed span at each end, for data whose range is not yet
+        understood.
+    length_padding:
+      value: 5
+      rationale: "Room for a prefix or suffix to appear without failing the ruleset."
+    row_count_tolerance:
+      value: 0.5
+      rationale: >-
+        Tolerates the volume halving or growing by half, which leaves the rule meaningful
+        only as a guard against an empty or duplicated load.

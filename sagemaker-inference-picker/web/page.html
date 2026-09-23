@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SageMaker Inference Picker</title>
+<meta name="description" content="Pick the right Amazon SageMaker inference option for a workload, and see why every other option was ruled out. Runs entirely in your browser.">
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #fbfbfd;
+  --surface: #ffffff;
+  --surface-2: #f4f4f7;
+  --border: #dcdce4;
+  --text: #16161d;
+  --text-dim: #5c5c6b;
+  --accent: #2f5fd0;
+  --good: #1a7f4b;
+  --good-bg: #e8f6ee;
+  --bad: #b3261e;
+  --bad-bg: #fdeceb;
+  --warn: #8a5a00;
+  --warn-bg: #fdf3e0;
+  --radius: 10px;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #101014;
+    --surface: #18181f;
+    --surface-2: #1f1f28;
+    --border: #32323e;
+    --text: #ececf2;
+    --text-dim: #a0a0b0;
+    --accent: #7ba3f5;
+    --good: #5ed394;
+    --good-bg: #16301f;
+    --bad: #ff9b93;
+    --bad-bg: #331a18;
+    --warn: #f0c070;
+    --warn-bg: #332813;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #101014;
+  --surface: #18181f;
+  --surface-2: #1f1f28;
+  --border: #32323e;
+  --text: #ececf2;
+  --text-dim: #a0a0b0;
+  --accent: #7ba3f5;
+  --good: #5ed394;
+  --good-bg: #16301f;
+  --bad: #ff9b93;
+  --bad-bg: #331a18;
+  --warn: #f0c070;
+  --warn-bg: #332813;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.6 var(--sans);
+  -webkit-text-size-adjust: 100%;
+}
+.wrap { max-width: 1120px; margin: 0 auto; padding: 0 16px 64px; }
+header { padding: 40px 0 24px; }
+h1 { font-size: clamp(1.6rem, 4vw, 2.2rem); margin: 0 0 8px; letter-spacing: -0.02em; }
+.lede { margin: 0 0 16px; color: var(--text-dim); max-width: 62ch; }
+.badge {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--good-bg); color: var(--good);
+  border: 1px solid color-mix(in srgb, var(--good) 35%, transparent);
+  border-radius: 999px; padding: 5px 14px; font-size: 0.82rem; font-weight: 600;
+}
+.layout { display: grid; gap: 24px; grid-template-columns: minmax(0, 340px) minmax(0, 1fr); align-items: start; }
+@media (max-width: 860px) { .layout { grid-template-columns: 1fr; } }
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 20px;
+}
+form.card { position: sticky; top: 16px; }
+@media (max-width: 860px) { form.card { position: static; } }
+fieldset { border: 0; margin: 0 0 18px; padding: 0; }
+legend {
+  font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--text-dim); padding: 0 0 8px;
+}
+label { display: block; font-size: 0.88rem; margin-bottom: 10px; }
+label > span { display: block; margin-bottom: 4px; color: var(--text-dim); }
+input[type="number"], select {
+  width: 100%; padding: 8px 10px; font: inherit; font-size: 0.92rem;
+  color: var(--text); background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 7px;
+}
+input[type="number"]:focus-visible, select:focus-visible, button:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+}
+.check { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 9px; font-size: 0.88rem; }
+.check input { margin: 4px 0 0; flex: none; accent-color: var(--accent); }
+.hint { display: block; color: var(--text-dim); font-size: 0.78rem; line-height: 1.45; }
+button {
+  font: inherit; font-size: 0.85rem; padding: 7px 14px; cursor: pointer;
+  background: var(--surface-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 7px;
+}
+button:hover { border-color: var(--accent); }
+.verdict { border-left: 4px solid var(--good); background: var(--good-bg); }
+.verdict.none { border-left-color: var(--bad); background: var(--bad-bg); }
+.verdict h2 { margin: 0; font-size: 1.22rem; line-height: 1.4; color: var(--good); }
+.verdict.none h2 { color: var(--bad); }
+.block { margin-top: 20px; }
+.block > h3 {
+  font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--text-dim); margin: 0 0 10px;
+}
+ul.reasons { margin: 0; padding-left: 1.15em; }
+ul.reasons li { margin-bottom: 7px; }
+ul.reasons.dim li { color: var(--text-dim); }
+ul.reasons.warn li { color: var(--warn); }
+ul.reasons.bad li { color: var(--bad); }
+.rejected { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.rejected + .rejected { margin-top: 10px; }
+.rejected > h4 {
+  margin: 0; padding: 9px 14px; font-size: 0.92rem; color: var(--bad);
+  background: var(--bad-bg); border-bottom: 1px solid var(--border);
+}
+.rejected ul { margin: 0; padding: 12px 14px 12px 2.1em; }
+.rejected li { margin-bottom: 7px; }
+.rejected li:last-child { margin-bottom: 0; }
+.srcs { padding: 0 14px 12px; }
+.srcs a {
+  display: block; font-family: var(--mono); font-size: 0.72rem;
+  color: var(--text-dim); word-break: break-all; margin-top: 3px;
+}
+.srcs a:hover { color: var(--accent); }
+.advice { background: var(--surface-2); border-radius: var(--radius); padding: 14px; }
+.advice + .advice { margin-top: 10px; }
+.advice h4 { margin: 0 0 5px; font-size: 0.95rem; color: var(--accent); }
+.advice p { margin: 0 0 7px; font-size: 0.92rem; }
+.advice a { font-family: var(--mono); font-size: 0.72rem; color: var(--text-dim); word-break: break-all; }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.86rem; }
+th, td { text-align: left; padding: 8px 11px; border-bottom: 1px solid var(--border); }
+th { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-dim); white-space: nowrap; }
+td.num { text-align: right; font-family: var(--mono); font-size: 0.8rem; white-space: nowrap; }
+.yes { color: var(--good); font-weight: 600; }
+.no { color: var(--bad); font-weight: 600; }
+tr.win td { background: var(--good-bg); }
+tr.out td:first-child { color: var(--text-dim); text-decoration: line-through; }
+details { margin-top: 12px; }
+summary { cursor: pointer; font-size: 0.88rem; color: var(--accent); }
+details[open] summary { margin-bottom: 10px; }
+footer { margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--border); color: var(--text-dim); font-size: 0.82rem; }
+footer a { color: var(--accent); }
+code { font-family: var(--mono); font-size: 0.88em; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+.topbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="topbar">
+    <h1>SageMaker Inference Picker</h1>
+    <button id="theme" type="button">Toggle theme</button>
+  </div>
+  <p class="lede">
+    Describe a workload and get the right Amazon SageMaker inference option, with the
+    specific documented limit that ruled out each of the others.
+  </p>
+  <p class="badge">
+    Runs entirely in your browser &middot; no AWS calls &middot; nothing leaves this page
+  </p>
+</header>
+
+<div class="layout">
+
+  <form class="card" id="form" autocomplete="off">
+    <fieldset>
+      <legend>The request</legend>
+      <label><span>Request payload (MB)</span>
+        <input type="number" id="payloadMb" value="1" min="0" step="any" required></label>
+      <label><span>Response size (MB)</span>
+        <input type="number" id="responseMb" value="1" min="0" step="any" required></label>
+      <label><span>Processing time per request (s)</span>
+        <input type="number" id="processingSeconds" value="5" min="0" step="any" required></label>
+    </fieldset>
+
+    <fieldset>
+      <legend>The shape of the load</legend>
+      <label><span>Traffic pattern</span>
+        <select id="traffic">
+          <option value="steady">Steady — a constant request rate</option>
+          <option value="bursty-idle" selected>Bursty — bursts, then idle</option>
+          <option value="scheduled-batch">Scheduled — a known dataset, on a schedule</option>
+        </select></label>
+      <label><span>p99 latency target (ms) — blank for none</span>
+        <input type="number" id="latencyP99Ms" value="" min="1" step="any"></label>
+      <label><span>Number of models</span>
+        <input type="number" id="modelCount" value="1" min="1" step="1" required></label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Requirements</legend>
+      <div class="check"><input type="checkbox" id="immediateResponse" checked>
+        <label for="immediateResponse">The caller needs an immediate response
+          <span class="hint">It waits for the prediction in the same request.</span></label></div>
+      <div class="check"><input type="checkbox" id="needsNotification">
+        <label for="needsNotification">It needs a completion notification
+          <span class="hint">Something must be told when the work finishes.</span></label></div>
+      <div class="check"><input type="checkbox" id="zeroIdleCost">
+        <label for="zeroIdleCost">It must cost nothing when idle
+          <span class="hint">No billing between requests.</span></label></div>
+      <div class="check"><input type="checkbox" id="gpuRequired">
+        <label for="gpuRequired">A GPU is required</label></div>
+    </fieldset>
+
+    <button type="button" id="reset">Reset</button>
+  </form>
+
+  <div>
+    <div class="card verdict" id="verdict" role="status" aria-live="polite">
+      <h2 id="headline">&hellip;</h2>
+    </div>
+
+    <div id="sections"></div>
+
+    <div class="card block">
+      <h3>The limits this decision rests on</h3>
+      <div class="tablewrap">
+        <table id="limitsTable">
+          <thead><tr>
+            <th>Option</th><th>Max payload</th><th>Max response</th><th>Max time</th>
+            <th>GPU</th><th>To zero</th><th>Inline</th><th>Notify</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <details>
+        <summary>Where these numbers come from</summary>
+        <div id="sources"></div>
+      </details>
+    </div>
+
+    <div class="card block">
+      <h3>How this decides</h3>
+      <p style="margin-top:0">
+        <strong>Hard constraints eliminate first.</strong> A documented limit or a missing
+        capability removes an option outright; no preference can bring it back. Limits are
+        inclusive, so a payload of exactly 4&nbsp;MB passes on serverless and 4.000001&nbsp;MB
+        does not. Setting a p99 target implies the caller waits, because an option that never
+        answers the caller cannot meet a latency target at all.
+      </p>
+      <p>
+        <strong>Soft preferences then rank whatever survived</strong>, using weights that are
+        declared alongside the limits with a written rationale. A tie goes to the option with
+        the least always-on infrastructure to run.
+      </p>
+      <p style="margin-bottom:0">
+        <strong>If nothing survives, it says so</strong> and names the requirements that
+        cannot hold together. It never falls back to a guess.
+      </p>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <p>
+    Every number on this page comes from <code>limits.yaml</code>, the same file the
+    <code>sagemaker-inference-picker</code> CLI reads, and this page is generated from it.
+    A test runs both engines over the same workloads and fails the build if they ever
+    disagree.
+  </p>
+  <p>
+    Limits last verified <strong id="lastVerified"></strong>.
+    <span id="disclaimer"></span>
+  </p>
+  <p>
+    <a href="https://github.com/imadelmakaoui-UJ/tools-aws">Source on GitHub</a>
+    &middot; MIT licence &middot; built by
+    <a href="https://github.com/1mad-elmakaoui">@1mad-elmakaoui</a>
+  </p>
+</footer>
+
+</div>
+
+<script type="application/json" id="limitsData">/*@@LIMITS@@*/</script>
+<script type="module">
+/*@@ENGINE@@*/
+
+const LIMITS = JSON.parse(document.getElementById("limitsData").textContent);
+
+const $ = (id) => document.getElementById(id);
+const el = (tag, className, text) => {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+};
+
+const FIELDS = [
+  "payloadMb", "responseMb", "processingSeconds", "traffic", "latencyP99Ms", "modelCount",
+  "immediateResponse", "needsNotification", "zeroIdleCost", "gpuRequired",
+];
+
+function readWorkload() {
+  const numberOf = (id, fallback) => {
+    const raw = $(id).value.trim();
+    if (raw === "") return fallback;
+    const value = Number(raw);
+    return Number.isFinite(value) && value >= 0 ? value : fallback;
+  };
+  const latencyRaw = $("latencyP99Ms").value.trim();
+  const latency = latencyRaw === "" ? null : Number(latencyRaw);
+  return {
+    payloadMb: numberOf("payloadMb", 0),
+    responseMb: numberOf("responseMb", 0),
+    processingSeconds: numberOf("processingSeconds", 0),
+    traffic: $("traffic").value,
+    latencyP99Ms: Number.isFinite(latency) && latency > 0 ? latency : null,
+    modelCount: Math.max(1, Math.floor(numberOf("modelCount", 1))),
+    immediateResponse: $("immediateResponse").checked,
+    needsNotification: $("needsNotification").checked,
+    zeroIdleCost: $("zeroIdleCost").checked,
+    gpuRequired: $("gpuRequired").checked,
+  };
+}
+
+function listBlock(title, lines, className) {
+  if (lines.length === 0) return null;
+  const card = el("div", "card block");
+  card.append(el("h3", null, title));
+  const list = el("ul", className ? `reasons ${className}` : "reasons");
+  for (const line of lines) list.append(el("li", null, line));
+  card.append(list);
+  return card;
+}
+
+function rejectionsBlock(result) {
+  const items = rejections(result, LIMITS);
+  if (items.length === 0) return null;
+  const card = el("div", "card block");
+  card.append(el("h3", null, "Ruled out"));
+  for (const item of items) {
+    const box = el("div", "rejected");
+    box.append(el("h4", null, item.display_name));
+    const list = el("ul");
+    for (const reason of item.reasons) list.append(el("li", null, reason));
+    box.append(list);
+    const srcs = el("div", "srcs");
+    for (const source of item.sources) {
+      const link = el("a", null, source);
+      link.href = source;
+      link.rel = "noreferrer";
+      srcs.append(link);
+    }
+    box.append(srcs);
+    card.append(box);
+  }
+  return card;
+}
+
+function adviceBlock(result) {
+  if (result.advice.length === 0) return null;
+  const card = el("div", "card block");
+  card.append(el("h3", null, "Also consider"));
+  for (const item of result.advice) {
+    const box = el("div", "advice");
+    box.append(el("h4", null, item.title));
+    box.append(el("p", null, item.message));
+    const link = el("a", null, item.source);
+    link.href = item.source;
+    link.rel = "noreferrer";
+    box.append(link);
+    card.append(box);
+  }
+  return card;
+}
+
+function markLimitsTable(result) {
+  const rows = $("limitsTable").tBodies[0].rows;
+  const eliminated = new Set(result.eliminations.map((item) => item.option));
+  for (const row of rows) {
+    row.classList.toggle("win", row.dataset.option === result.recommended);
+    row.classList.toggle("out", eliminated.has(row.dataset.option));
+  }
+}
+
+function render() {
+  const result = recommend(readWorkload(), LIMITS);
+
+  $("headline").textContent = headline(result, LIMITS);
+  $("verdict").classList.toggle("none", !result.resolved);
+
+  const sections = $("sections");
+  sections.replaceChildren();
+  const blocks = [
+    listBlock("Why", decidingFactors(result, LIMITS)),
+    listBlock("Watch out", caveats(result), "warn"),
+    listBlock("Conflicting requirements", conflictSummary(result, LIMITS), "bad"),
+    listBlock("Also viable", runnersUp(result, LIMITS), "dim"),
+    adviceBlock(result),
+    rejectionsBlock(result),
+  ];
+  for (const block of blocks) if (block) sections.append(block);
+
+  markLimitsTable(result);
+}
+
+function buildLimitsTable() {
+  const body = $("limitsTable").tBodies[0];
+  const sources = $("sources");
+  const tick = (value) => {
+    const cell = el("td");
+    cell.append(el("span", value ? "yes" : "no", value ? "yes" : "no"));
+    return cell;
+  };
+  const shorten = (text) => (text === "no documented limit" ? "none" : text);
+
+  for (const option of OPTIONS) {
+    const entry = LIMITS.options[option];
+    const row = el("tr");
+    row.dataset.option = option;
+    row.append(el("td", null, entry.display_name));
+    for (const [name, format] of [
+      ["max_request_payload_mb", megabytes],
+      ["max_response_payload_mb", megabytes],
+      ["max_processing_seconds", seconds],
+    ]) {
+      row.append(el("td", "num", shorten(format(entry.limits[name].value))));
+    }
+    row.append(tick(entry.capabilities.gpu_supported.value));
+    row.append(tick(entry.capabilities.scales_to_zero.value));
+    row.append(tick(entry.capabilities.returns_inline_response.value));
+    row.append(tick(entry.capabilities.native_completion_notification.value));
+    body.append(row);
+
+    const group = el("div", "advice");
+    group.append(el("h4", null, entry.display_name));
+    group.append(el("p", null, entry.summary));
+    const seen = [];
+    for (const section of ["limits", "capabilities", "facts"]) {
+      for (const item of Object.values(entry[section])) {
+        if (seen.includes(item.source)) continue;
+        seen.push(item.source);
+        const link = el("a", null, item.source);
+        link.href = item.source;
+        link.rel = "noreferrer";
+        group.append(link);
+      }
+    }
+    sources.append(group);
+  }
+}
+
+$("lastVerified").textContent = LIMITS.last_verified;
+$("disclaimer").textContent = LIMITS.disclaimer;
+buildLimitsTable();
+
+for (const id of FIELDS) {
+  $(id).addEventListener("input", render);
+  $(id).addEventListener("change", render);
+}
+$("reset").addEventListener("click", () => {
+  $("form").reset();
+  render();
+});
+$("theme").addEventListener("click", () => {
+  const root = document.documentElement;
+  const dark = getComputedStyle(root).getPropertyValue("--bg").trim() === "#101014";
+  root.dataset.theme = dark ? "light" : "dark";
+});
+
+render();
+</script>
+</body>
+</html>
