@@ -1,0 +1,117 @@
+name: sagemaker-idle-finder
+
+# Each tool in this repository has its own workflow. GitHub only reads workflow files
+# from .github/workflows at the repository root, so the separation is done with a paths
+# filter and a working-directory instead: this one runs only when its own tool changes.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "sagemaker-idle-finder/**"
+      - ".github/workflows/sagemaker-idle-finder.yml"
+  pull_request:
+    paths:
+      - "sagemaker-idle-finder/**"
+      - ".github/workflows/sagemaker-idle-finder.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sagemaker-idle-finder-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: sagemaker-idle-finder
+
+jobs:
+  check:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "sagemaker-idle-finder/pyproject.toml"
+
+      - name: Create the environment
+        run: uv venv --python ${{ matrix.python-version }}
+
+      - name: Install the project and its dev tools
+        run: uv pip install -e . --group dev
+
+      - name: Lint
+        run: .venv/bin/ruff check .
+
+      - name: Check formatting
+        run: .venv/bin/ruff format --check .
+
+      - name: Type-check
+        run: .venv/bin/mypy
+
+      - name: Test
+        run: .venv/bin/pytest
+
+      # The demo image is exported from a real run, so it is a second opinion on the
+      # renderer: if the table changes and nobody regenerated it, this fails.
+      - name: The demo image must match what the tool prints
+        run: |
+          .venv/bin/python scripts/make_demo.py
+          git diff --exit-code -- docs/demo.svg \
+            || (echo "::error::docs/demo.svg is stale. Run scripts/make_demo.py and commit the result." && exit 1)
+
+      # The tool is read-only by construction. This asserts it at the source level too, so
+      # a future edit cannot quietly introduce a write call that the allowlist test would
+      # only catch if someone remembered to add the operation to it.
+      - name: No write operation may appear anywhere in the source
+        run: |
+          if grep -rniE '\b(create|delete|update|put|stop|start|register|deregister|invoke)_[a-z_]*\(' \
+               src/sagemaker_idle_finder --include='*.py' | grep -v 'def \|#'; then
+            echo "::error::a call that looks like a write operation appeared in src/."
+            exit 1
+          fi
+          echo "no write-shaped calls in src/"
+
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "sagemaker-idle-finder/pyproject.toml"
+
+      - name: Build the wheel
+        run: uv build --wheel
+
+      # Both data files are read at runtime: prices.yaml for every money figure and
+      # policy.yaml for the allowlist the read-only guard enforces. A wheel missing
+      # either installs cleanly and then fails on first use.
+      - name: The wheel must ship the price and policy files
+        run: |
+          unzip -l dist/*.whl | grep -q 'sagemaker_idle_finder/data/prices.yaml'
+          unzip -l dist/*.whl | grep -q 'sagemaker_idle_finder/data/policy.yaml'
+
+      - name: The installed console script must run
+        run: |
+          uv venv --python 3.12
+          uv pip install dist/*.whl
+          .venv/bin/sagemaker-idle-finder --version
+          .venv/bin/sagemaker-idle-finder policy --output json > /dev/null
+          # policy is the one command that needs no credentials, so it is the one that can
+          # be exercised here; it prints the IAM document the README quotes.
+          .venv/bin/sagemaker-idle-finder policy | grep -q 'sagemaker:ListEndpoints'

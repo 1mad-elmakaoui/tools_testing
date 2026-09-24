@@ -1,0 +1,131 @@
+# What this tool asks AWS for, and where it draws the line between idle and healthy.
+#
+# Two kinds of entry live here and they are validated differently:
+#
+#   * `aws` and `limits` are facts — API identifiers and documented service quotas. Every
+#     entry MUST carry a `source` URL.
+#   * `thresholds` are this tool's judgement calls. Every entry MUST carry a `rationale`,
+#     because no AWS document says how little traffic makes an endpoint wasteful.
+#
+# tests/test_catalog.py enforces both rules against this file.
+
+schema_version: 1
+
+meta:
+  last_verified: "2026-09-23"
+  verification_note: >-
+    API identifiers and scalable-target formats were checked against the SageMaker
+    Developer Guide and the Application Auto Scaling user guide; the GetMetricData caps
+    against the CloudWatch service quotas page.
+  disclaimer: >-
+    Every cost and waste figure this tool prints is an estimate derived from published
+    on-demand list prices. It ignores savings plans, reserved capacity, private pricing,
+    data transfer and storage, so the real bill will differ. Check an endpoint yourself
+    before deleting it.
+
+# The read-only API surface. This is the complete set of operations the tool may call, and
+# aws.py refuses at runtime to call anything outside it.
+aws:
+  allowed_operations:
+    value:
+      sagemaker: ["ListEndpoints", "DescribeEndpoint", "DescribeEndpointConfig"]
+      cloudwatch: ["GetMetricData"]
+      application-autoscaling: ["DescribeScalableTargets"]
+    source: "https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonsagemaker.html"
+    note: >-
+      Every one of these is a read operation. The tool has no code path that creates,
+      modifies or deletes anything, and the allowlist is enforced by a wrapper around each
+      client rather than only by review.
+  metric_namespace:
+    value: "AWS/SageMaker"
+    source: "https://docs.aws.amazon.com/sagemaker/latest/dg/monitoring-cloudwatch.html"
+  invocations_metric:
+    value: "Invocations"
+    source: "https://docs.aws.amazon.com/sagemaker/latest/dg/monitoring-cloudwatch.html"
+    note: "Summed over the period. Dimensions are EndpointName and VariantName."
+  variant_scalable_dimension:
+    value: "sagemaker:variant:DesiredInstanceCount"
+    source: "https://docs.aws.amazon.com/sagemaker/latest/dg/endpoint-auto-scaling-add-policy.html"
+    note: 'The resource id is "endpoint/<EndpointName>/variant/<VariantName>".'
+  inference_component_scalable_dimension:
+    value: "sagemaker:inference-component:DesiredCopyCount"
+    source: "https://docs.aws.amazon.com/sagemaker/latest/dg/endpoint-auto-scaling-zero-instances.html"
+    note: >-
+      Inference components scale by copy count, not instance count, and use the resource id
+      "inference-component/<name>". A registered target with a minimum capacity of zero is
+      what makes scale-to-zero possible, so such a variant is never idle waste.
+  serverless_max_memory_gb:
+    value: 6
+    source: "https://docs.aws.amazon.com/sagemaker/latest/dg/serverless-endpoints.html"
+    note: >-
+      Serverless inference offers memory sizes from 1024 MB to 6144 MB, so 6 GB is the
+      ceiling a model has to fit under before a move to serverless is possible at all.
+  autoscaling_service_namespace:
+    value: "sagemaker"
+    source: "https://docs.aws.amazon.com/autoscaling/application/userguide/services-that-can-integrate-sagemaker.html"
+
+# Documented service quotas that shape how requests are batched.
+limits:
+  max_metric_queries_per_call:
+    value: 500
+    source: "https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cloudwatch_limits.html"
+    note: "A single GetMetricData call can include as many as 500 MetricDataQuery structures."
+  max_datapoints_per_call:
+    value: 100800
+    source: "https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cloudwatch_limits.html"
+    note: >-
+      The total datapoints returned by one call. With an hourly period a 14-day lookback is
+      336 datapoints per query, so this bound bites before the 500-query one.
+
+# Where this tool draws its lines. None of these is an AWS figure.
+thresholds:
+  underused_invocations_per_instance_hour:
+    value: 1.0
+    rationale: >-
+      An endpoint serving fewer than one request per hour per instance is paying for
+      capacity it is not using by any reasonable reading. The figure is deliberately low:
+      the point is to surface obvious waste with few false positives, not to second-guess
+      a well-sized endpoint. Override it with --threshold.
+  default_lookback_days:
+    value: 14
+    rationale: >-
+      Long enough to span a fortnightly batch job or a quiet week, short enough that the
+      CloudWatch query stays cheap and the answer describes current behaviour rather than
+      last quarter's.
+  minimum_window_coverage:
+    value: 0.8
+    rationale: >-
+      An endpoint must have existed for at least this fraction of the lookback before a
+      verdict is given. Below it the zero-invocation evidence is mostly time the endpoint
+      did not exist, so it is reported as too new to judge rather than as idle. This is the
+      single most important guard against a false positive.
+  metric_period_seconds:
+    value: 3600
+    rationale: >-
+      Hourly granularity. Finer resolution multiplies datapoints without changing whether a
+      near-silent endpoint is near-silent, and CloudWatch only keeps one-minute data for
+      fifteen days anyway.
+  hours_per_month:
+    value: 730
+    rationale: >-
+      The convention AWS itself uses when quoting monthly prices (365 days / 12 months x 24
+      hours). Used only to turn an hourly price into a monthly estimate.
+  serverless_candidate_max_instance_memory_gb:
+    value: 16
+    rationale: >-
+      Serverless inference tops out at 6 GB of memory, but an instance's RAM is a poor
+      proxy for what the model needs: an ml.m5.large has 8 GB and may be serving a model of
+      a few hundred megabytes. Suggesting serverless up to roughly an xlarge treats it as a
+      candidate worth checking rather than a certainty, and the suggestion says so. Above
+      this size the move is unlikely enough that asynchronous inference is the better
+      suggestion.
+  max_retries:
+    value: 5
+    rationale: >-
+      Enough for the exponential backoff to ride out a burst of throttling on a large
+      account without leaving the operator staring at a stalled scan.
+  retry_base_delay_seconds:
+    value: 0.5
+    rationale: >-
+      Doubling from half a second reaches roughly sixteen seconds by the fifth attempt,
+      which is the right order for CloudWatch and SageMaker throttling.

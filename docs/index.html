@@ -62,7 +62,7 @@ a { color: var(--accent); }
     Small, focused command-line tools for working with AWS. Each one is its own package,
     installable on its own.
   </p>
-  <p class="badge">Read-only by default &middot; nothing here calls AWS to run</p>
+  <p class="badge">Read-only &middot; no tool here creates, modifies or deletes anything</p>
 </header>
 
 <a class="tool" href="sagemaker-inference-picker/">
@@ -85,9 +85,21 @@ a { color: var(--accent); }
   <span class="cta">On GitHub &rarr;</span>
 </a>
 
+<a class="tool" href="https://github.com/imadelmakaoui-UJ/tools-aws/tree/main/sagemaker-idle-finder">
+  <h2>sagemaker-idle-finder</h2>
+  <p>
+    Scans an account for SageMaker endpoints that cost money while receiving little or no
+    traffic, estimates the monthly waste and names a specific remedy for each one. Calls
+    five read-only APIs and nothing else &mdash; an allowlist the code checks before every
+    call, and the one the IAM policy in its README is generated from.
+  </p>
+  <span class="cta">On GitHub &rarr;</span>
+</a>
+
 <h3>What these have in common</h3>
 <ul>
-  <li>No tool calls an API that creates, modifies or deletes anything.</li>
+  <li>No tool calls an API that creates, modifies or deletes anything, and where a tool
+      reads from AWS the allowlist is enforced at runtime, not just documented.</li>
   <li>Every AWS limit they rely on is stored with the documentation page it was verified
       against and the date it was checked.</li>
   <li>The claims in the documentation are enforced by tests, so the build fails when one
