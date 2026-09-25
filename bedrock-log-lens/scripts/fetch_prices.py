@@ -1,0 +1,143 @@
+"""Regenerate the generated half of data/prices.yaml from the AWS Price List bulk API.
+
+The Price List has Bedrock token prices, but it keys them by marketing name — "Claude
+Sonnet 4 (Amazon Bedrock Edition)" — and by usage type. It carries no Bedrock model ID
+anywhere: the whole product record is six attributes, and none of them is the
+``anthropic.claude-sonnet-4-20250514-v1:0`` that appears in a log.
+
+So this script writes the numbers, and the ``model_names`` section of prices.yaml, which
+maps model IDs to those marketing names, stays hand-maintained with a source per entry.
+That division is deliberate: AWS owns the prices, a human owns the association, and a model
+ID nobody has mapped is reported as unpriced rather than quietly costed at zero.
+
+    .venv/bin/python scripts/fetch_prices.py
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import json
+import re
+import urllib.request
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+TOOL_ROOT = Path(__file__).resolve().parent.parent
+OUTPUT = TOOL_ROOT / "src" / "bedrock_log_lens" / "data" / "prices.yaml"
+
+PRICING_HOST = "https://pricing.us-east-1.amazonaws.com"
+OFFER = "AmazonBedrockFoundationModels"
+REGION_INDEX = f"{PRICING_HOST}/offers/v1.0/aws/{OFFER}/current/region_index.json"
+
+#: The on-demand per-token usage types, and what this tool calls them. Reserved throughput
+#: and provisioned model units are priced per hour, not per token, so they are not here.
+#: Batch and latency-optimized rates are left out too: a log record does not say which
+#: applied, and guessing would put a wrong number on every batch call.
+_RATE_PATTERN = re.compile(
+    r"_(?P<kind>InputTokenCount|OutputTokenCount|CacheReadInputTokenCount|"
+    r"CacheWriteInputTokenCount)(?P<scope>_Global)?-Units$"
+)
+
+_KINDS = {
+    "InputTokenCount": "input",
+    "OutputTokenCount": "output",
+    "CacheReadInputTokenCount": "cache_read",
+    "CacheWriteInputTokenCount": "cache_write",
+}
+
+#: Anything mentioning these in its usage type is not a plain on-demand token rate.
+_EXCLUDED = ("Batch", "Reserved", "LatencyOptimized", "TPM", "ProvisionedThroughput")
+
+
+def _get(url: str) -> dict[str, Any]:
+    with urllib.request.urlopen(url, timeout=180) as response:
+        payload: dict[str, Any] = json.load(response)
+        return payload
+
+
+def _rates_for_region(url: str) -> dict[str, dict[str, float]]:
+    """Every per-token on-demand rate in one region, keyed by service name."""
+    document = _get(f"{PRICING_HOST}{url}")
+    on_demand = document.get("terms", {}).get("OnDemand", {})
+
+    rates: dict[str, dict[str, float]] = {}
+    for sku, product in document.get("products", {}).items():
+        attributes = product.get("attributes", {})
+        usage_type = str(attributes.get("usagetype", ""))
+        if any(word in usage_type for word in _EXCLUDED):
+            continue
+        match = _RATE_PATTERN.search(usage_type)
+        if not match:
+            continue
+
+        service_name = str(attributes.get("servicename", "")).strip()
+        if not service_name:
+            continue
+
+        field = _KINDS[match.group("kind")]
+        if match.group("scope"):
+            field = f"{field}_global"
+
+        for term in on_demand.get(sku, {}).values():
+            for dimension in term.get("priceDimensions", {}).values():
+                unit = str(dimension.get("unit", ""))
+                if "1M tokens" not in unit:
+                    continue
+                price = float(dimension["pricePerUnit"]["USD"])
+                rates.setdefault(service_name, {})[field] = price
+    return rates
+
+
+def main() -> None:
+    """Fetch every region's token rates and rewrite the generated sections."""
+    index = _get(REGION_INDEX)
+    regions: dict[str, Any] = index["regions"]
+    print(f"{len(regions)} regions in the {OFFER} offer")
+
+    existing: dict[str, Any] = (
+        yaml.safe_load(OUTPUT.read_text(encoding="utf-8")) if OUTPUT.exists() else {}
+    )
+    overrides = existing.get("model_name_overrides") or {}
+
+    by_region: dict[str, dict[str, dict[str, float]]] = {}
+    total = 0
+    for name, entry in sorted(regions.items()):
+        rates = _rates_for_region(entry["currentVersionUrl"])
+        if rates:
+            by_region[name] = {
+                service: dict(sorted(values.items())) for service, values in sorted(rates.items())
+            }
+            total += sum(len(values) for values in rates.values())
+        print(f"  {name}: {len(rates)} models")
+
+    document = {
+        "schema_version": 1,
+        "meta": {
+            "publication_date": index.get("publicationDate")
+            or dt.datetime.now(tz=dt.UTC).isoformat(),
+            "last_verified": dt.date.today().isoformat(),
+            "source": f"{PRICING_HOST}/offers/v1.0/aws/{OFFER}/current/region_index.json",
+            "note": (
+                "On-demand token rates in USD per million tokens, generated by "
+                "scripts/fetch_prices.py from the AWS Price List bulk API. Batch, "
+                "latency-optimized and provisioned-throughput rates are deliberately "
+                "excluded: a log record does not say which applied, so including them "
+                "would put a confident wrong number on those calls."
+            ),
+        },
+        "model_name_overrides": overrides,
+        "rates_usd_per_million_tokens": by_region,
+    }
+
+    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    OUTPUT.write_text(
+        yaml.safe_dump(document, sort_keys=False, allow_unicode=True, width=100),
+        encoding="utf-8",
+    )
+    print(f"wrote {OUTPUT.relative_to(TOOL_ROOT)}: {len(by_region)} regions, {total} rates")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,135 @@
+# The lines this tool draws, and the facts it draws them against.
+#
+# Two kinds of entry, and the loader tells them apart. An AWS fact must carry a `source`
+# URL; a judgement call must carry a `rationale`. Loading fails without them, so a number
+# cannot arrive here without saying which kind it is and who is accountable for it.
+#
+# Everything under `thresholds` is this tool's opinion. The anomaly detectors in particular
+# are heuristics: they describe a shape in a call pattern, not a proven fault, and the
+# report says so wherever they appear.
+
+schema_version: 1
+
+meta:
+  last_verified: "2026-09-24"
+  verification_note: >-
+    The record schema was checked against AWS's model invocation logging documentation and
+    cross-checked against independent implementations of the same schema. Prices come from
+    the AWS Price List bulk API; see data/prices.yaml for its publication date.
+  disclaimer: >-
+    Costs are estimates from published on-demand list prices. They ignore private pricing,
+    commitments, provisioned throughput and batch rates, none of which a log record
+    identifies. Anomaly findings are heuristics, not proof of a fault.
+
+aws:
+  schema_type:
+    value: "ModelInvocationLog"
+    source: "https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-logging.html"
+    note: >-
+      Every S3 model invocation log record announces itself with this schemaType. A record
+      that does not is counted and skipped rather than guessed at.
+
+  supported_schema_major:
+    value: "1"
+    source: "https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-logging.html"
+    note: >-
+      Schema version 1.x. A 2.x record could give the same field names different meanings,
+      so it is skipped rather than read hopefully.
+
+  content_fields:
+    value: ["inputBodyJson", "outputBodyJson"]
+    source: "https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-logging.html"
+    note: >-
+      The two fields carrying the prompt and the response. They are present only when Text
+      data delivery is enabled, and this tool drops both at parse time.
+
+  s3_log_prefix_template:
+    value: "AWSLogs/{account_id}/BedrockModelInvocationLogs/{region}/{yyyy}/{MM}/{dd}/{HH}/"
+    source: "https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-logging.html"
+    note: >-
+      Where Bedrock writes log objects under the configured bucket and key prefix. Used to
+      explain what to point --prefix at, not to require it: any prefix is read.
+
+  read_only_operations:
+    value:
+      s3: ["ListObjectsV2", "GetObject"]
+    source: "https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazons3.html"
+    note: >-
+      The complete set of S3 calls this tool can make, both reads. ListObjectsV2 is the API
+      behind the s3:ListBucket permission; GetObject reads one log object.
+
+  iam_actions:
+    value:
+      ListObjectsV2: "s3:ListBucket"
+      GetObject: "s3:GetObject"
+    source: "https://docs.aws.amazon.com/AmazonS3/latest/userguide/list_amazons3.html"
+    note: >-
+      The IAM action that authorises each API call, which is not always the call's own
+      name: listing a bucket's contents is the ListObjectsV2 API but the s3:ListBucket
+      permission, and it is granted on the bucket rather than on the objects in it. The
+      IAM policy this tool prints is built from this mapping and the allowlist above, so
+      the documented policy cannot drift from the calls the code makes.
+
+thresholds:
+  outlier_percentile:
+    value: 99
+    rationale: >-
+      A request is called an outlier when it sits above its model's 99th percentile for
+      input or output tokens. That is one call in a hundred, which is rare enough to be
+      worth a look and common enough that a busy account still sees some.
+
+  minimum_requests_for_percentiles:
+    value: 20
+    rationale: >-
+      Below twenty samples a p99 is just the largest request wearing a statistical hat. The
+      figures are still shown, because they are the best available, but the report marks
+      them as thin rather than presenting them as a distribution.
+
+  burst_window_seconds:
+    value: 60
+    rationale: >-
+      One minute is short enough that a human-driven workload rarely fills it and long
+      enough to catch an agent looping on a slow model. Overridable, because a batch job and
+      an interactive assistant look nothing alike.
+
+  burst_request_count:
+    value: 60
+    rationale: >-
+      Sixty calls from one identity inside the window: an average of one per second,
+      sustained. Normal for a deliberate batch job, which is why the finding names the
+      identity and leaves the judgement to a human.
+
+  rate_jump_multiple:
+    value: 10.0
+    rationale: >-
+      A window carrying ten times an identity's own median rate is a change of behaviour,
+      not a busy patch. Measuring against the identity's own baseline rather than a global
+      one keeps a steady high-volume caller from being flagged every window.
+
+  rate_jump_minimum_requests:
+    value: 20
+    rationale: >-
+      Ten times a very small baseline is noise: two calls where there is usually none is a
+      tenfold jump. A window has to carry at least twenty requests before the multiple means
+      anything.
+
+  repeated_shape_count:
+    value: 20
+    rationale: >-
+      Twenty calls from one identity to one model with an identical input token count,
+      inside the burst window. Identical prompt sizes at that rate is what an agent
+      re-sending the same context looks like, and it is visible without reading a single
+      prompt.
+
+  baseline_minimum_windows:
+    value: 5
+    rationale: >-
+      A median needs something to be the middle of. With fewer than five windows of history
+      for an identity there is no baseline to compare against, so the rate-jump heuristic
+      stays silent rather than inventing one.
+
+  top_expensive_requests:
+    value: 10
+    rationale: >-
+      Enough to show a pattern among the costly calls, few enough to read. Overridable with
+      --top.

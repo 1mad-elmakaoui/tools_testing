@@ -1,0 +1,235 @@
+# Everything this tool measures against, in one place.
+#
+# Two kinds of entry, and the loader tells them apart:
+#
+#   * an AWS fact must carry a `source` URL. It is something AWS documents, and if AWS
+#     changes it this file is what needs updating.
+#   * a judgement call must carry a `rationale`. It is this tool's opinion about where a
+#     line sits, and reasonable people could put it elsewhere. Every one of them can be
+#     overridden from the command line.
+#
+# Loading fails if either is missing, so a number cannot quietly arrive without saying
+# which kind it is.
+
+schema_version: 1
+
+meta:
+  last_verified: "2026-09-24"
+  verification_note: >-
+    Checked against the Kinesis Data Streams developer guide (Quotas and Limits, Enhanced
+    Shard-level Metrics, Choosing the Data Stream Capacity Mode) and against the Kinesis
+    and CloudWatch API models shipped in botocore, which is where the shape of every
+    response this tool reads is defined.
+  disclaimer: >-
+    Utilisation figures are computed from CloudWatch metrics, which are aggregated per
+    minute. Throttling is decided by AWS per second, so a shard can be throttled in a
+    minute this tool scores below 100%.
+
+# ---------------------------------------------------------------- AWS facts
+
+aws:
+  allowed_operations:
+    value:
+      kinesis: ["ListStreams", "DescribeStreamSummary", "ListShards"]
+      cloudwatch: ["GetMetricData"]
+    source: "https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonkinesis.html"
+    note: >-
+      Every one of these is a read. The two sampling operations are deliberately absent:
+      they are added to the allowlist only when --sample-keys is passed, so without that
+      flag the process cannot call them even if the code tried.
+
+  sampling_operations:
+    value:
+      kinesis: ["GetShardIterator", "GetRecords"]
+    source: "https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonkinesis.html"
+    note: >-
+      Reads, but not free ones: they consume the shard's read throughput, which is shared
+      with the stream's real consumers. Opt-in only.
+
+  metric_namespace:
+    value: "AWS/Kinesis"
+    source: "https://docs.aws.amazon.com/streams/latest/dev/monitoring-with-cloudwatch.html"
+
+  incoming_bytes_metric:
+    value: "IncomingBytes"
+    source: "https://docs.aws.amazon.com/streams/latest/dev/monitoring-with-cloudwatch.html"
+    note: >-
+      Bytes successfully put to the shard, including partition keys. Dimensions StreamName
+      and ShardId. Shard-level only when enhanced monitoring is on.
+
+  incoming_records_metric:
+    value: "IncomingRecords"
+    source: "https://docs.aws.amazon.com/streams/latest/dev/monitoring-with-cloudwatch.html"
+
+  write_throttle_metric:
+    value: "WriteProvisionedThroughputExceeded"
+    source: "https://docs.aws.amazon.com/streams/latest/dev/monitoring-with-cloudwatch.html"
+    note: >-
+      The number of records REJECTED by throttling for the shard, not the number of
+      throttling events. It covers both per-shard write limits at once, which is why this
+      tool has to look at bytes and records separately to say which one bound.
+
+  shard_level_metric_names:
+    value: ["IncomingBytes", "IncomingRecords", "WriteProvisionedThroughputExceeded"]
+    source: "https://docs.aws.amazon.com/kinesis/latest/APIReference/API_EnableEnhancedMonitoring.html"
+    note: >-
+      The three this tool needs, spelled as EnableEnhancedMonitoring accepts them. A stream
+      whose EnhancedMonitoring lists ALL has them all.
+
+  shard_metric_period_seconds:
+    value: 60
+    source: "https://docs.aws.amazon.com/streams/latest/dev/monitoring-with-cloudwatch.html"
+    note: >-
+      Kinesis sends shard-level metrics to CloudWatch every minute. Asking for a longer
+      period would average away the bursts that cause throttling in the first place.
+
+  shard_write_bytes_per_second:
+    value: 1048576
+    source: "https://docs.aws.amazon.com/streams/latest/dev/service-sizes-and-limits.html"
+    note: >-
+      1 MB/s per shard, including partition keys. One mebibyte, matching how CloudWatch
+      reports IncomingBytes.
+
+  shard_write_records_per_second:
+    value: 1000
+    source: "https://docs.aws.amazon.com/streams/latest/dev/service-sizes-and-limits.html"
+
+  on_demand_peak_multiple:
+    value: 2.0
+    source: "https://docs.aws.amazon.com/streams/latest/dev/how-do-i-size-a-stream.html"
+    note: >-
+      An on-demand stream accommodates up to double the peak write throughput seen in the
+      previous 30 days, and scales as new peaks appear.
+
+  on_demand_scaling_window_minutes:
+    value: 15
+    source: "https://docs.aws.amazon.com/streams/latest/dev/how-do-i-size-a-stream.html"
+    note: >-
+      Write throttling can occur if traffic more than doubles within 15 minutes, because
+      the stream has not finished scaling. This is why an on-demand stream is never told
+      to add shards: it has no shard count to set.
+
+  get_records_calls_per_second_per_shard:
+    value: 5
+    source: "https://docs.aws.amazon.com/streams/latest/dev/service-sizes-and-limits.html"
+
+  get_records_max_records_per_call:
+    value: 10000
+    source: "https://docs.aws.amazon.com/streams/latest/dev/service-sizes-and-limits.html"
+
+  cloudwatch_one_minute_retention_days:
+    value: 15
+    source: "https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cloudwatch_concepts.html"
+    note: >-
+      CloudWatch keeps one-minute datapoints for 15 days. A lookback longer than this
+      returns nothing at the period this tool needs, so it refuses rather than showing an
+      empty stream as healthy.
+
+limits:
+  max_metric_queries_per_call:
+    value: 500
+    source: "https://docs.aws.amazon.com/AmazonCloudWatch/latest/APIReference/API_GetMetricData.html"
+  max_datapoints_per_call:
+    value: 100800
+    source: "https://docs.aws.amazon.com/AmazonCloudWatch/latest/APIReference/API_GetMetricData.html"
+    note: >-
+      At a 60 second period a 24 hour window is 1,440 datapoints per query, so this cap
+      binds long before the query count does.
+
+# ---------------------------------------------------- this tool's judgement calls
+
+thresholds:
+  default_lookback_hours:
+    value: 24
+    rationale: >-
+      Long enough to contain a daily traffic cycle, short enough to keep one-minute
+      resolution affordable in datapoints. Shard metrics are emitted per minute and
+      CloudWatch keeps them for 15 days, so a longer window trades the detail that makes
+      skew visible for history that rarely changes the answer.
+
+  hot_shard_utilisation:
+    value: 0.8
+    rationale: >-
+      A shard at four fifths of its documented write limit in its busiest minute is close
+      enough to the line to be called hot: per-second bursts inside that minute will
+      already be hitting it.
+
+  skew_max_to_mean_ratio:
+    value: 3.0
+    rationale: >-
+      The busiest shard carrying three times the average shard's traffic is well outside
+      what hash distribution produces on its own once a stream has more than a handful of
+      shards.
+
+  skew_gini:
+    value: 0.4
+    rationale: >-
+      Gini runs 0 for perfectly even traffic to 1 for everything on one shard. Random hash
+      assignment over many keys lands near 0.1 to 0.2, so 0.4 is clear of normal
+      lumpiness without demanding a single pathological key.
+
+  skew_headroom_utilisation:
+    value: 0.5
+    rationale: >-
+      For skew to be the story rather than size, the stream as a whole has to have room to
+      spare. If the average shard is past half its limit in its busiest minute, adding
+      shards would help too, and the answer is mixed rather than pure skew.
+
+  capacity_utilisation:
+    value: 0.7
+    rationale: >-
+      Throttling while the average shard sits above 70% of its limit is a stream running
+      out of room, not one hot key. Below that, an evenly loaded stream should not be
+      throttling at all and something else is going on.
+
+  minimum_shards_for_skew_statistics:
+    value: 2
+    rationale: >-
+      Skew is a statement about how traffic is spread between shards. A single-shard
+      stream cannot be skewed, and its ratios would all be 1.0, which would read as
+      perfectly even rather than as not applicable.
+
+  minimum_window_coverage:
+    value: 0.5
+    rationale: >-
+      A shard that existed for less than half the window has too little history to rank
+      against shards that were open throughout. It is reported, but kept out of the
+      statistics so that a split does not look like skew.
+
+  sample_max_get_records_calls:
+    value: 10
+    rationale: >-
+      Sampling borrows read throughput from the stream's real consumers. Ten calls is
+      enough to see which keys dominate and small enough to be over in about two seconds
+      at the documented five calls per second.
+
+  sample_max_records:
+    value: 5000
+    rationale: >-
+      Enough to rank partition keys by frequency with confidence, while staying well
+      inside a single GetRecords call's 10,000 record ceiling.
+
+  sample_top_keys_shown:
+    value: 10
+    rationale: >-
+      A hot key shows up at the top or not at all. A longer list is noise.
+
+  sample_minimum_share_shown:
+    value: 0.01
+    rationale: >-
+      Keys below a hundredth of the sample are the long tail, and listing them buries the
+      one key the sample was taken to find. They are counted and summarised rather than
+      named, so the total still adds up.
+
+  max_retries:
+    value: 5
+    rationale: >-
+      ListStreams is limited to five transactions a second, so a region with many streams
+      will be throttled on a normal run. Five attempts with backoff clears that without
+      hanging.
+
+  retry_base_delay_seconds:
+    value: 0.5
+    rationale: >-
+      Doubles to about 8 seconds by the last attempt, which is longer than any of the
+      per-second API limits this tool can trip.

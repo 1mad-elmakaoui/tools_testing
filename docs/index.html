@@ -96,6 +96,31 @@ a { color: var(--accent); }
   <span class="cta">On GitHub &rarr;</span>
 </a>
 
+<a class="tool" href="https://github.com/imadelmakaoui-UJ/tools-aws/tree/main/kinesis-skew">
+  <h2>kinesis-skew</h2>
+  <p>
+    Throttled Kinesis writes have two causes that look identical in the stream-level
+    metrics and have opposite fixes: one hot partition key pinning a single shard, or a
+    stream that is simply too small. This reads the shard-level metrics, does the
+    arithmetic and tells you which one you have &mdash; and so whether adding shards would
+    help at all.
+  </p>
+  <span class="cta">On GitHub &rarr;</span>
+</a>
+
+<a class="tool" href="https://github.com/imadelmakaoui-UJ/tools-aws/tree/main/bedrock-log-lens">
+  <h2>bedrock-log-lens</h2>
+  <p>
+    Bedrock invocation logs record every prompt your users sent and every reply the model
+    gave. This answers the operational questions &mdash; tokens, cost, who, and whether
+    something is stuck in a loop &mdash; from the metadata alone. The prompt and response
+    fields are discarded as each record is parsed, and the type the reports are built from
+    has no field that could hold them, so a leak is not something anyone has to remember
+    to prevent.
+  </p>
+  <span class="cta">On GitHub &rarr;</span>
+</a>
+
 <h3>What these have in common</h3>
 <ul>
   <li>No tool calls an API that creates, modifies or deletes anything, and where a tool

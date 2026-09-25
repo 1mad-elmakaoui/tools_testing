@@ -1,0 +1,128 @@
+name: kinesis-skew
+
+# Each tool in this repository has its own workflow. GitHub only reads workflow files
+# from .github/workflows at the repository root, so the separation is done with a paths
+# filter and a working-directory instead: this one runs only when its own tool changes.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "kinesis-skew/**"
+      - ".github/workflows/kinesis-skew.yml"
+  pull_request:
+    paths:
+      - "kinesis-skew/**"
+      - ".github/workflows/kinesis-skew.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kinesis-skew-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: kinesis-skew
+
+jobs:
+  check:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "kinesis-skew/pyproject.toml"
+
+      - name: Create the environment
+        run: uv venv --python ${{ matrix.python-version }}
+
+      - name: Install the project and its dev tools
+        run: uv pip install -e . --group dev
+
+      - name: Lint
+        run: .venv/bin/ruff check .
+
+      - name: Check formatting
+        run: .venv/bin/ruff format --check .
+
+      - name: Type-check
+        run: .venv/bin/mypy
+
+      - name: Test
+        run: .venv/bin/pytest
+
+      # The demo image is exported from a real run, so it is a second opinion on the
+      # renderer: if the report changes and nobody regenerated it, this fails.
+      - name: The demo image must match what the tool prints
+        run: |
+          .venv/bin/python scripts/make_demo.py
+          git diff --exit-code -- docs/demo.svg \
+            || (echo "::error::docs/demo.svg is stale. Run scripts/make_demo.py and commit the result." && exit 1)
+
+      # The tool is read-only by construction. This asserts it at the source level too, so a
+      # future edit cannot quietly introduce a write call that the allowlist test would only
+      # catch if someone remembered to add the operation to it.
+      # Named operations rather than verb prefixes: a prefix list catches Rich's own
+      # add_column and add_row, and a gate that cries wolf gets disabled.
+      - name: No write operation may appear anywhere in the source
+        run: |
+          writes='create_stream|delete_stream|put_record|put_records|merge_shards|split_shard'
+          writes="$writes|enable_enhanced_monitoring|disable_enhanced_monitoring"
+          writes="$writes|increase_stream_retention_period|decrease_stream_retention_period"
+          writes="$writes|update_shard_count|update_stream_mode|update_stream"
+          writes="$writes|add_tags_to_stream|remove_tags_from_stream"
+          writes="$writes|register_stream_consumer|deregister_stream_consumer"
+          writes="$writes|start_stream_encryption|stop_stream_encryption"
+          writes="$writes|put_metric_data|put_metric_alarm|delete_alarms|put_dashboard"
+          if grep -rniE "($writes)\\(" src/kinesis_skew --include='*.py'; then
+            echo "::error::a write operation appeared in src/."
+            exit 1
+          fi
+          echo "no write calls in src/"
+
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "kinesis-skew/pyproject.toml"
+
+      - name: Build the wheel
+        run: uv build --wheel
+
+      # Every limit and threshold is read from this file at runtime. A wheel without it
+      # installs cleanly and then fails on first use.
+      - name: The wheel must ship the limits file
+        run: unzip -l dist/*.whl | grep -q 'kinesis_skew/data/limits.yaml'
+
+      - name: The installed console script must run
+        run: |
+          uv venv --python 3.12
+          uv pip install dist/*.whl
+          .venv/bin/kinesis-skew --version
+          .venv/bin/kinesis-skew policy --output json > /dev/null
+          # policy is the one command that needs no credentials, so it is the one that can
+          # be exercised here; it prints the IAM document the README quotes.
+          .venv/bin/kinesis-skew policy | grep -q 'kinesis:ListShards'
+          # The sampling operations must not appear in the base policy.
+          .venv/bin/kinesis-skew policy --output json \
+            | python -c "import json,sys; p=json.load(sys.stdin)['iam_policy']; \
+                actions=p['Statement'][0]['Action']; \
+                sys.exit(1) if any('GetRecords' in a for a in actions) else print('base policy grants no record reads')"

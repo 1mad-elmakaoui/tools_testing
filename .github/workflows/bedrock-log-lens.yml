@@ -1,0 +1,155 @@
+name: bedrock-log-lens
+
+# Each tool in this repository has its own workflow. GitHub only reads workflow files
+# from .github/workflows at the repository root, so the separation is done with a paths
+# filter and a working-directory instead: this one runs only when its own tool changes.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "bedrock-log-lens/**"
+      - ".github/workflows/bedrock-log-lens.yml"
+  pull_request:
+    paths:
+      - "bedrock-log-lens/**"
+      - ".github/workflows/bedrock-log-lens.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bedrock-log-lens-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: bedrock-log-lens
+
+jobs:
+  check:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "bedrock-log-lens/pyproject.toml"
+
+      - name: Create the environment
+        run: uv venv --python ${{ matrix.python-version }}
+
+      - name: Install the project and its dev tools
+        run: uv pip install -e . --group dev
+
+      - name: Lint
+        run: .venv/bin/ruff check .
+
+      - name: Check formatting
+        run: .venv/bin/ruff format --check .
+
+      - name: Type-check
+        run: .venv/bin/mypy
+
+      - name: Test
+        run: .venv/bin/pytest
+
+      # The demo image is exported from a real run over records that contain prompts, so it
+      # is a second opinion on both the renderer and the privacy guarantee.
+      - name: The demo image must match what the tool prints
+        run: |
+          .venv/bin/python scripts/make_demo.py
+          git diff --exit-code -- docs/demo.svg \
+            || (echo "::error::docs/demo.svg is stale. Run scripts/make_demo.py and commit the result." && exit 1)
+
+  privacy:
+    name: Privacy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "bedrock-log-lens/pyproject.toml"
+
+      - name: Create the environment
+        run: |
+          uv venv --python 3.12
+          uv pip install -e . --group dev
+
+      # The tool's central promise, given a job of its own so a failure here is unmissable
+      # rather than one line in a long test log.
+      # --no-cov because this is a deliberately narrow run: the whole-suite coverage gate
+      # lives in the check job, and applying it to one file would fail on coverage rather
+      # than on privacy, which is the one thing this job exists to report.
+      - name: Prompts and responses must never reach any output
+        run: .venv/bin/pytest tests/test_privacy.py -q --no-cov
+
+      # Only parse.py and content.py may name the two fields that hold what was said.
+      # Anything else touching them is how a leak gets introduced.
+      - name: Only the parser and the content command may name the body fields
+        run: |
+          offenders=$(grep -rln 'inputBodyJson\|outputBodyJson' src/bedrock_log_lens \
+            --include='*.py' | grep -v -e 'parse.py' -e 'content.py' -e 'models.py' || true)
+          if [ -n "$offenders" ]; then
+            echo "::error::these modules reference a content field: $offenders"
+            exit 1
+          fi
+          echo "only the parser, the content command and the field list name them"
+
+      # A directory of logs must be analysable with no AWS SDK present at all.
+      - name: The core must work with no boto3 installed
+        run: |
+          uv venv --python 3.12 /tmp/nobotocore
+          VIRTUAL_ENV=/tmp/nobotocore uv pip install .
+          /tmp/nobotocore/bin/python -c "import importlib.util, sys; \
+            sys.exit(1) if importlib.util.find_spec('boto3') else print('boto3 absent')"
+          /tmp/nobotocore/bin/bedrock-log-lens --version
+
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "bedrock-log-lens/pyproject.toml"
+
+      - name: Build the wheel
+        run: uv build --wheel
+
+      # Both data files are read at runtime: prices.yaml for every cost figure and
+      # policy.yaml for the thresholds and the allowlist.
+      - name: The wheel must ship the price and policy files
+        run: |
+          unzip -l dist/*.whl | grep -q 'bedrock_log_lens/data/prices.yaml'
+          unzip -l dist/*.whl | grep -q 'bedrock_log_lens/data/policy.yaml'
+
+      - name: The installed console script must run
+        run: |
+          uv venv --python 3.12
+          uv pip install dist/*.whl
+          .venv/bin/bedrock-log-lens --version
+          .venv/bin/bedrock-log-lens policy --output json > /dev/null
+          .venv/bin/bedrock-log-lens policy | grep -q 's3:GetObject'
+          # The printed policy must grant nothing that writes.
+          .venv/bin/bedrock-log-lens policy --output json \
+            | python -c "import json,sys; p=json.load(sys.stdin)['iam_policy']; \
+                actions=[a for s in p['Statement'] for a in s['Action']]; \
+                sys.exit(1) if any(a.startswith(('s3:Put','s3:Delete','s3:Create')) for a in actions) \
+                else print('policy grants only reads')"
